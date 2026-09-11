@@ -1,0 +1,10 @@
+# 仓库内统一 LF（保持 gradlew 可在 Linux/CI 上执行）
+* text=auto eol=lf
+
+# Windows 批处理需要 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制文件不做行尾转换
+*.jar binary
+*.png binary

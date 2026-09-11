@@ -12,16 +12,10 @@ import org.icarus.tingere.Tingere;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 有序配方模型
- */
 @RequiredArgsConstructor
-public class ShapedRecipeModel implements CustomRecipe {
+public class ShapedRecipeModel implements CustomRecipeInterface {
 
-    @RequiredArgsConstructor
-    public static class IngredientInfo {
-        public final ItemStack itemStack;
-        public final boolean exactMatch; // true 表示精确匹配，false 表示材料匹配
+    public record IngredientInfo(ItemStack itemStack, boolean matchesExactly) {
     }
 
     @Getter
@@ -40,7 +34,7 @@ public class ShapedRecipeModel implements CustomRecipe {
             char symbol = entry.getKey();
             IngredientInfo info = entry.getValue();
             RecipeChoice choice;
-            if (info.exactMatch) {
+            if (info.matchesExactly) {
                 choice = new RecipeChoice.ExactChoice(info.itemStack);
             } else {
                 choice = new RecipeChoice.MaterialChoice(info.itemStack.getType());

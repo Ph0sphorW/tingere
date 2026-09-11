@@ -17,15 +17,15 @@ import org.icarus.tingere.config.ResultOverride;
 import org.icarus.tingere.config.SpecialRecipeInfo;
 import org.icarus.tingere.util.ItemComponents;
 
+import java.util.logging.Logger;
+
 /**
- * 在合成瞬间修正结果物品。
+ * 在修改这个类之前，你需要知道：
  * <p>
- * 该类并非多余：Bukkit 的 {@code TransmuteRecipe} 构造器只接受 {@code Material}，
- * 既无法携带结果组件、数量也恒为 1，所以「转化配方带组件 / 数量」与「{@code special}
- * 同 id 转化」这两件事无法在注册阶段完成，只能在 {@link PrepareItemCraftEvent} 里补。
- * <p>
- * 只对 {@code specialRecipes} / {@code resultOverrides} 里登记过的配方生效；两张表都以完整的
- * NamespacedKey（含插件命名空间）为键，并在每次 reload 时清空，因此不会误接管其他插件或原版配方。
+ * 由于沟槽的 Bukkit 限制，不注入 NMS 是绝对无法做到主动定义 transmute 的结果物品的附加标签以及个数的
+ * 只能是一个雷霆 Material
+ * 因此选择更加不需要脑子的想法接管事件
+ * 你不会真的有受虐癖到想去反射 NMS 吧？
  */
 @RequiredArgsConstructor
 public class CraftListener implements Listener {
@@ -43,7 +43,7 @@ public class CraftListener implements Listener {
         String fullKey = keyed.getKey().toString();
         ResultOverride override = loader.getResultOverride(fullKey);
 
-        // 特殊配方优先，并合并两处组件配置（result.components 先，special.components 后覆盖）
+        // Special first
         SpecialRecipeInfo specialInfo = loader.getSpecialRecipeInfo(fullKey);
         if (specialInfo != null) {
             handleSpecialCraft(event, specialInfo, override, recipe);
@@ -67,34 +67,29 @@ public class CraftListener implements Listener {
         event.getInventory().setResult(modified);
     }
 
-    private void handleSpecialCraft(PrepareItemCraftEvent event, SpecialRecipeInfo info,
-                                    ResultOverride override, Recipe recipe) {
+    private void handleSpecialCraft(PrepareItemCraftEvent event,
+                                    SpecialRecipeInfo info,
+                                    ResultOverride override,
+                                    Recipe recipe) {
         ItemStack sourceInput = findSourceItem(event.getInventory().getMatrix(), recipe, info);
         if (sourceInput == null) {
-            // 合成过程中的常态（材料尚未放齐），不作为错误刷屏
             return;
         }
 
         ItemStack finalItem;
         if (info.isCopyInput()) {
-            finalItem = sourceInput.clone();
-            finalItem.setType(info.getTargetMaterial());
+            finalItem = sourceInput.withType(info.getTargetMaterial());
         } else {
             finalItem = new ItemStack(info.getTargetMaterial());
         }
         finalItem.setAmount(info.getAmount());
 
-        // result.components 先应用，special.components 再应用，后者覆盖同名键
         ItemComponents.apply(plugin, finalItem, override == null ? null : override.components(), "result");
         ItemComponents.apply(plugin, finalItem, info.getComponents(), "special");
 
         event.getInventory().setResult(finalItem);
     }
 
-    /**
-     * 确定「被转化的主物品」。
-     * 未显式指定 {@code source-character} / {@code source-slot} 时，回退到第一个非空槽位。
-     */
     private ItemStack findSourceItem(ItemStack[] matrix, Recipe recipe, SpecialRecipeInfo info) {
         if (info.getSourceCharacter() != null) {
             return findByShape(matrix, recipe, info.getSourceCharacter());
@@ -105,7 +100,7 @@ public class CraftListener implements Listener {
             return slot < matrix.length && !isEmpty(matrix[slot]) ? matrix[slot].clone() : null;
         }
 
-        // 转化配方：优先取与 input 声明匹配的那一个
+        // transmute
         if (recipe instanceof TransmuteRecipe transmute) {
             RecipeChoice input = transmute.getInput();
             for (ItemStack item : matrix) {
@@ -124,12 +119,13 @@ public class CraftListener implements Listener {
     }
 
     private ItemStack findByShape(ItemStack[] matrix, Recipe recipe, char symbol) {
+        Logger logger = plugin.getLogger();
         if (!(recipe instanceof ShapedRecipe shaped)) {
-            plugin.getLogger().warning("source-character 只能用于有序配方，当前配方类型: " + recipe.getClass().getSimpleName());
+            logger.warning("Key 'source-character' can be only used in ordered recipe type. Current type is: " + recipe.getClass().getSimpleName());
             return null;
         }
 
-        // 工作台固定 3x3，pattern 每行左侧对齐，不足的位置视为空格
+        // 不会有无尽工作台吧。
         String[] pattern = shaped.getShape();
         for (int row = 0; row < Math.min(pattern.length, 3); row++) {
             String line = pattern[row];
@@ -142,7 +138,7 @@ public class CraftListener implements Listener {
             }
         }
 
-        plugin.getLogger().warning("未在 pattern 中找到字符 '" + symbol + "'");
+        logger.warning("Couldn't find target charactor '" + symbol + "' in recipe");
         return null;
     }
 

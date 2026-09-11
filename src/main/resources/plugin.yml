@@ -1,9 +1,9 @@
 name: tingere
-version: 1.6.4-BETA
+version: 1.7.0
 main: org.icarus.tingere.Tingere
 api-version: "1.21"
-author: [AnnieWa, Ph0sphorW]
-description: 支持物品组件的自定义配方插件
+authors: ["Annieawa", "Ph0sphorW"]
+description: The data-driven, DataComponent friendly custom recipe plugin
 
 commands:
   tingere:

@@ -12,7 +12,7 @@ import org.icarus.tingere.Tingere;
 import java.util.List;
 
 @RequiredArgsConstructor
-public class ShapelessRecipeModel implements CustomRecipe {
+public class ShapelessRecipeModel implements CustomRecipeInterface {
 
     @Getter
     private final String key;
@@ -23,12 +23,9 @@ public class ShapelessRecipeModel implements CustomRecipe {
     public Recipe toBukkitRecipe() {
         NamespacedKey namespacedKey = new NamespacedKey(Tingere.getInstance(), key);
         ShapelessRecipe recipe = new ShapelessRecipe(namespacedKey, result);
-
-        // 添加原料（同样使用 ExactChoice）
         for (ItemStack ingredient : ingredients) {
             recipe.addIngredient(new RecipeChoice.ExactChoice(ingredient));
         }
-
         return recipe;
     }
 }

@@ -254,7 +254,7 @@ public class TingereCommandExecutor implements CommandExecutor, TabCompleter {
         ingredient.setAmount(1);
         player.getInventory().addItem(ingredient).values().forEach(item ->
                 player.getWorld().dropItem(player.getLocation(), item));
-        player.sendRichMessage("<green>已获取配方 §e" + key + " <green>的第 " + index + " 个原料");
+        player.sendRichMessage("<green>已获取配方 <yellow>" + key + "</yellow> <green>的第 " + index + " 个原料");
         return true;
     }
 

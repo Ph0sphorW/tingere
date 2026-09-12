@@ -13,9 +13,10 @@ import org.bukkit.inventory.ShapedRecipe;
 import org.bukkit.inventory.TransmuteRecipe;
 import org.icarus.tingere.Tingere;
 import org.icarus.tingere.config.RecipeLoader;
-import org.icarus.tingere.config.ResultOverride;
-import org.icarus.tingere.config.SpecialRecipeInfo;
-import org.icarus.tingere.util.ItemComponents;
+import org.icarus.tingere.parser.ComponentParser;
+import org.icarus.tingere.recipe.Ingredient;
+import org.icarus.tingere.recipe.ResultOverride;
+import org.icarus.tingere.recipe.SpecialDefinition;
 
 import java.util.logging.Logger;
 
@@ -44,7 +45,7 @@ public class CraftListener implements Listener {
         ResultOverride override = loader.getResultOverride(fullKey);
 
         // Special first
-        SpecialRecipeInfo specialInfo = loader.getSpecialRecipeInfo(fullKey);
+        SpecialDefinition specialInfo = loader.getSpecialRecipeInfo(fullKey);
         if (specialInfo != null) {
             handleSpecialCraft(event, specialInfo, override, recipe);
             return;
@@ -63,12 +64,12 @@ public class CraftListener implements Listener {
         if (override.amount() > 0) {
             modified.setAmount(override.amount());
         }
-        ItemComponents.apply(plugin, modified, override.components(), "result");
+        ComponentParser.apply(plugin, modified, override.components(), "result");
         event.getInventory().setResult(modified);
     }
 
     private void handleSpecialCraft(PrepareItemCraftEvent event,
-                                    SpecialRecipeInfo info,
+                                    SpecialDefinition info,
                                     ResultOverride override,
                                     Recipe recipe) {
         ItemStack sourceInput = findSourceItem(event.getInventory().getMatrix(), recipe, info);
@@ -77,45 +78,22 @@ public class CraftListener implements Listener {
         }
 
         ItemStack finalItem;
-        if (info.isCopyInput()) {
-            finalItem = sourceInput.withType(info.getTargetMaterial());
+        if (info.copyInputOrDefault()) {
+            finalItem = sourceInput.withType(info.targetMaterial());
         } else {
-            finalItem = new ItemStack(info.getTargetMaterial());
+            finalItem = new ItemStack(info.targetMaterial());
         }
-        finalItem.setAmount(info.getAmount());
+        finalItem.setAmount(override == null ? Ingredient.DEFAULT_AMOUNT : override.amount());
 
-        ItemComponents.apply(plugin, finalItem, override == null ? null : override.components(), "result");
-        ItemComponents.apply(plugin, finalItem, info.getComponents(), "special");
+        ComponentParser.apply(plugin, finalItem, override == null ? null : override.components(), "result");
+        ComponentParser.apply(plugin, finalItem, info.components(), "special");
 
         event.getInventory().setResult(finalItem);
     }
 
-    private ItemStack findSourceItem(ItemStack[] matrix, Recipe recipe, SpecialRecipeInfo info) {
-        if (info.getSourceCharacter() != null) {
-            return findByShape(matrix, recipe, info.getSourceCharacter());
-        }
-
-        if (info.getSourceSlot() != null) {
-            int slot = info.getSourceSlot();
-            return slot < matrix.length && !isEmpty(matrix[slot]) ? matrix[slot].clone() : null;
-        }
-
-        // transmute
-        if (recipe instanceof TransmuteRecipe transmute) {
-            RecipeChoice input = transmute.getInput();
-            for (ItemStack item : matrix) {
-                if (!isEmpty(item) && new RecipeChoice.MaterialChoice(item.getType()).equals(input)) {
-                    return item.clone();
-                }
-            }
-        }
-
-        for (ItemStack item : matrix) {
-            if (!isEmpty(item)) {
-                return item.clone();
-            }
-        }
-        return null;
+    private ItemStack findSourceItem(ItemStack[] matrix, Recipe recipe, SpecialDefinition info) {
+        Character sourceCharacter = info.sourceCharacterOrNull();
+        return findByShape(matrix, recipe, sourceCharacter);
     }
 
     private ItemStack findByShape(ItemStack[] matrix, Recipe recipe, char symbol) {

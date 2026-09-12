@@ -1,49 +1,56 @@
 package org.icarus.tingere.config;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import org.bukkit.Bukkit;
 import org.bukkit.Keyed;
-import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.MemoryConfiguration;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.Recipe;
 import org.icarus.tingere.Tingere;
-import org.icarus.tingere.model.CustomRecipeInterface;
-import org.icarus.tingere.model.ShapedRecipeModel;
-import org.icarus.tingere.model.ShapelessRecipeModel;
-import org.icarus.tingere.model.TransmuteRecipeModel;
-import org.icarus.tingere.util.ItemComponents;
+import org.icarus.tingere.parser.RecipeParser;
+import org.icarus.tingere.recipe.Ingredient;
+import org.icarus.tingere.recipe.RecipeDefinition;
+import org.icarus.tingere.recipe.ResultOverride;
+import org.icarus.tingere.recipe.SpecialDefinition;
+import org.icarus.tingere.recipe.TransmuteRecipeDefinition;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
 
 public class RecipeLoader {
+
+    private static final String RECIPES_FOLDER = "recipes";
+
     private final Tingere plugin;
+    private final Logger logger;
+    private final RecipeParser parser = new RecipeParser();
+
     private final Map<String, ItemStack> recipeResults = new HashMap<>();
     private final Map<String, List<ItemStack>> recipeIngredients = new HashMap<>();
-    private final Map<String, SpecialRecipeInfo> specialRecipes = new HashMap<>();
+    private final Map<String, SpecialDefinition> specialRecipes = new HashMap<>();
     private final Map<String, ResultOverride> resultOverrides = new HashMap<>();
     private final Set<NamespacedKey> registeredKeys = new HashSet<>();
-    private final Logger logger;
-
-    private void addRegisteredKey(NamespacedKey key) {
-        registeredKeys.add(key);
-    }
 
     public RecipeLoader(Tingere plugin) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
     }
 
-    public SpecialRecipeInfo getSpecialRecipeInfo(String fullKey) {
+    public SpecialDefinition getSpecialRecipeInfo(String fullKey) {
         return specialRecipes.get(fullKey);
     }
 
@@ -51,7 +58,7 @@ public class RecipeLoader {
         return resultOverrides.get(fullKey);
     }
 
-    public List<ItemStack> getIngredients(String key) { // 新增
+    public List<ItemStack> getIngredients(String key) {
         return recipeIngredients.get(key);
     }
 
@@ -74,14 +81,12 @@ public class RecipeLoader {
             Recipe recipe = iter.next();
             if (recipe instanceof Keyed keyed) {
                 NamespacedKey key = keyed.getKey();
-                if (key.getNamespace().equals(plugin.getName().toLowerCase())) {
+                if (key.getNamespace().equals(plugin.getName().toLowerCase(Locale.ROOT))) {
                     toRemove.add(key);
                 }
             }
         }
-        for (NamespacedKey key : toRemove) {
-            Bukkit.removeRecipe(key);
-        }
+        toRemove.forEach(Bukkit::removeRecipe);
         registeredKeys.clear();
     }
 
@@ -92,7 +97,7 @@ public class RecipeLoader {
         specialRecipes.clear();
         registeredKeys.clear();
 
-        File recipesDir = new File(plugin.getDataFolder(), "recipes");
+        File recipesDir = new File(plugin.getDataFolder(), RECIPES_FOLDER);
         if (!recipesDir.isDirectory()) {
             if (recipesDir.mkdirs()) {
                 logger.info("Created recipe folder: " + recipesDir.getAbsolutePath());
@@ -100,8 +105,9 @@ public class RecipeLoader {
             return 0;
         }
 
+        Path base = recipesDir.toPath();
         List<Path> recipePaths;
-        try (Stream<Path> paths = Files.walk(recipesDir.toPath())) {
+        try (Stream<Path> paths = Files.walk(base)) {
             recipePaths = paths
                     .filter(Files::isRegularFile)
                     .filter(RecipeLoader::isYamlFile)
@@ -114,17 +120,7 @@ public class RecipeLoader {
 
         int count = 0;
         for (Path recipePath : recipePaths) {
-            File file = recipePath.toFile();
-            try {
-                int loaded = loadRecipesFromFile(file);
-                if (loaded > 0) {
-                    String relative = recipesDir.toPath().relativize(recipePath).toString().replace('\\', '/');
-                    logger.info("Loaded " + loaded + " recipe(s) from " + relative + ".");
-                }
-                count += loaded;
-            } catch (Exception e) {
-                logger.log(Level.WARNING, "Error while trying to parse file " + file.getName() + ":", e);
-            }
+            count += loadRecipesFromFile(recipePath, base.relativize(recipePath).toString().replace('\\', '/'));
         }
         return count;
     }
@@ -134,239 +130,87 @@ public class RecipeLoader {
         return name.endsWith(".yml") || name.endsWith(".yaml");
     }
 
-    private int loadRecipesFromFile(File file) {
-        YamlConfiguration config = YamlConfiguration.loadConfiguration(file);
-        int loaded = 0;
+    private int loadRecipesFromFile(Path path, String relative) {
+        JsonNode root;
+        try {
+            root = parser.read(path);
+        } catch (Exception e) {
+            logger.warning("Failed to parse " + relative + ": " + describeException(e));
+            return 0;
+        }
 
-        if (config.contains("type")) {
-            if (registerRecipe(config)) {
-                loaded++;
-            }
+        if (root.isMissingNode() || root.isNull()) {
+            logger.warning("Ignored empty recipe file: " + relative);
+            return 0;
+        }
+        if (!root.isObject()) {
+            logger.warning("Ignored " + relative + ": the root must be a mapping");
+            return 0;
+        }
+
+        int loaded = 0;
+        if (root.has("type")) {
+            loaded += tryRegister(root, relative, RecipeParser.labelOf(root, relative)) ? 1 : 0;
         } else {
-            for (String key : config.getKeys(false)) {
-                ConfigurationSection section = config.getConfigurationSection(key);
-                if (section != null && registerRecipe(section)) {
-                    loaded++;
-                }
+            Iterator<Map.Entry<String, JsonNode>> fields = root.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> entry = fields.next();
+                loaded += tryRegister(entry.getValue(), relative, entry.getKey()) ? 1 : 0;
             }
+        }
+
+        if (loaded > 0) {
+            logger.info("Loaded " + loaded + " recipe(s) from " + relative + ".");
         }
         return loaded;
     }
 
-    private boolean registerRecipe(ConfigurationSection section) {
+    private boolean tryRegister(JsonNode node, String relative, String label) {
         try {
-            String type = section.getString("type");
-            if (type == null) {
-                logger.warning("Skipped registration for missing recipe type");
-                return false;
-            }
-
-            String key = section.getString("key");
-            if (key == null) {
-                logger.warning("Skipped registration for missing recipe key");
-                return false;
-            }
-
-            ItemStack result = parseItemStack(section.getConfigurationSection("result"));
-            if (result == null) {
-                logger.warning("Skipped recipe " + key + " for invalid result item");
-                return false;
-            }
-
-            CustomRecipeInterface recipeModel;
-            if ("shaped".equalsIgnoreCase(type)) {
-                List<String> pattern = section.getStringList("pattern");
-                if (pattern.isEmpty()) {
-                    logger.warning("Skipped ordered recipe " + key + " for an empty pattern");
-                    return false;
-                }
-
-                ConfigurationSection ingredientsSection = section.getConfigurationSection("ingredients");
-                if (ingredientsSection == null) {
-                    logger.warning("Skipped ordered recipe " + key + " for missing ingredients");
-                    return false;
-                }
-
-                Map<Character, ShapedRecipeModel.IngredientInfo> ingredients = new HashMap<>();
-                for (String charKey : ingredientsSection.getKeys(false)) {
-                    if (charKey.length() != 1) {
-                        logger.warning("Skipped ordered recipe " + key + " for multiplied char key: " + charKey);
-                        return false;
-                    }
-                    char symbol = charKey.charAt(0);
-                    ConfigurationSection ingSec = ingredientsSection.getConfigurationSection(charKey);
-                    if (ingSec == null) {
-                        logger.warning("Skipped ordered recipe " + key + " for having a invalid ingredient " + charKey);
-                        return false;
-                    }
-
-                    ItemStack ing = parseItemStack(ingSec);
-                    if (ing == null) {
-                        logger.warning("Skipped ordered recipe " + key + " for invalid char key: " + charKey);
-                        return false;
-                    }
-
-                    String matchMode = ingSec.getString("match-mode", "exact");
-                    boolean exactMatch = !"material".equalsIgnoreCase(matchMode);
-
-                    ingredients.put(symbol, new ShapedRecipeModel.IngredientInfo(ing, exactMatch));
-                }
-
-                recipeModel = new ShapedRecipeModel(key, pattern, ingredients, result);
-            } else if ("shapeless".equalsIgnoreCase(type)) {
-                List<Map<?, ?>> ingMaps = section.getMapList("ingredients");
-                if (ingMaps.isEmpty()) {
-                    logger.warning("Skipped shapeless recipe " + key + " for missing ingredients");
-                    return false;
-                }
-
-                List<ItemStack> ingredients = new ArrayList<>();
-                for (Map<?, ?> map : ingMaps) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> stringMap = (Map<String, Object>) map;
-                    ConfigurationSection ingSec = new MemoryConfiguration().createSection("temp", stringMap);
-                    ItemStack ing = parseItemStack(ingSec);
-                    if (ing == null) {
-                        logger.warning("Skipped shapeless recipe " + key + " for invalid ingredients");
-                        return false;
-                    }
-                    ingredients.add(ing);
-                }
-
-                recipeModel = new ShapelessRecipeModel(key, ingredients, result);
-            } else if ("transmute".equalsIgnoreCase(type)) {
-                ConfigurationSection inputSection = section.getConfigurationSection("input");
-                ConfigurationSection materialSection = section.getConfigurationSection("material");
-
-                if (inputSection == null || materialSection == null) {
-                    logger.warning("Skipped transmute recipe " + key + " for missing input or material");
-                    return false;
-                }
-
-                ItemStack input = parseItemStack(inputSection);
-                ItemStack material = parseItemStack(materialSection);
-
-                if (input == null || material == null) {
-                    logger.warning("Skipped transmute recipe " + key + " for invalid input or material");
-                    return false;
-                }
-
-                NamespacedKey fullKey = new NamespacedKey(plugin, key);
-
-                ConfigurationSection resultComponents = section.getConfigurationSection("result.components");
-                if (resultComponents != null || result.getAmount() != 1) {
-                    resultOverrides.put(fullKey.toString(), new ResultOverride(resultComponents, result.getAmount()));
-                }
-
-                recipeModel = new TransmuteRecipeModel(key, input, material, result);
-
-            } else {
-                logger.warning("Skipped recipe " + key + " for invalid type " + type);
-                return false;
-            }
-            NamespacedKey namespacedKey = new NamespacedKey(plugin, key);
-            Bukkit.addRecipe(recipeModel.toBukkitRecipe());
-            addRegisteredKey(namespacedKey);
-            recipeResults.put(key, result.clone());
-            List<ItemStack> ingredients = new ArrayList<>();
-
-            if ("shaped".equalsIgnoreCase(type)) {
-                List<String> pattern = section.getStringList("pattern");
-                ConfigurationSection ingredientsSec = section.getConfigurationSection("ingredients");
-                if (ingredientsSec != null) {
-                    for (String row : pattern) {
-                        for (char c : row.toCharArray()) {
-                            if (c != ' ') {
-                                ConfigurationSection ingSec = ingredientsSec.getConfigurationSection(String.valueOf(c));
-                                if (ingSec != null) {
-                                    ItemStack ing = parseItemStack(ingSec);
-                                    if (ing != null) {
-                                        ingredients.add(ing.clone());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } else if ("shapeless".equalsIgnoreCase(type)) {
-                List<Map<?, ?>> ingMaps = section.getMapList("ingredients");
-                for (Map<?, ?> map : ingMaps) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> stringMap = (Map<String, Object>) map;
-                    ConfigurationSection ingSec = new MemoryConfiguration().createSection("temp", stringMap);
-                    ItemStack ing = parseItemStack(ingSec);
-                    if (ing != null) ingredients.add(ing.clone());
-                }
-            } else if ("transmute".equalsIgnoreCase(type)) {
-                ConfigurationSection inputSec = section.getConfigurationSection("input");
-                ConfigurationSection materialSec = section.getConfigurationSection("material");
-                if (inputSec != null) {
-                    ItemStack input = parseItemStack(inputSec);
-                    if (input != null) ingredients.add(input.clone());
-                }
-                if (materialSec != null) {
-                    ItemStack material = parseItemStack(materialSec);
-                    if (material != null) ingredients.add(material.clone());
-                }
-            }
-
-            if (section.contains("special")) {
-                ConfigurationSection specialSec = section.getConfigurationSection("special");
-                if (specialSec != null) {
-                    String targetMatStr = specialSec.getString("target-material");
-                    Material targetMaterial = targetMatStr == null ? null : Material.getMaterial(targetMatStr.toUpperCase());
-                    if (targetMaterial == null || targetMaterial.isAir()) {
-                        logger.warning("Recipe " + key + " has an invalid special.target-material: " + targetMatStr + ", ignored");
-                    } else {
-                        SpecialRecipeInfo info = new SpecialRecipeInfo();
-                        info.setTargetMaterial(targetMaterial);
-                        info.setCopyInput(specialSec.getBoolean("copy-input", true));
-                        info.setComponents(specialSec.getConfigurationSection("components"));
-                        info.setAmount(result.getAmount());
-
-                        if (specialSec.contains("source-character")) {
-                            String charStr = specialSec.getString("source-character");
-                            if (charStr != null && charStr.length() == 1) {
-                                info.setSourceCharacter(charStr.charAt(0));
-                            }
-                        }
-                        if (specialSec.contains("source-slot")) {
-                            int slot = specialSec.getInt("source-slot");
-                            if (slot >= 0 && slot <= 8) {
-                                info.setSourceSlot(slot);
-                            } else {
-                                logger.warning("Special recipe " + key + " has an invalid source-slot " + slot + ": should be a number between 0 and 8");
-                            }
-                        }
-
-                        NamespacedKey fullKey = new NamespacedKey(plugin, key);
-                        specialRecipes.put(fullKey.toString(), info);
-                        logger.info("Stored special recipe: " + fullKey + " -> " + info.getTargetMaterial() + " x" + info.getAmount() +
-                                (info.getSourceCharacter() != null ? ", sourceChar=" + info.getSourceCharacter() : "") +
-                                (info.getSourceSlot() != null ? ", sourceSlot=" + info.getSourceSlot() : ""));
-                    }
-                }
-            }
-            recipeIngredients.put(key, ingredients);
+            register(parser.bind(node));
             return true;
         } catch (Exception e) {
-            logger.log(Level.WARNING, "An error occurred while trying to parse a recipe", e);
+            logger.warning("Skipped recipe '" + label + "' in " + relative + ": " + describeException(e));
             return false;
         }
     }
 
-    private ItemStack parseItemStack(ConfigurationSection section) {
-        if (section == null) return null;
+    private void register(RecipeDefinition definition) {
+        String key = definition.key();
+        NamespacedKey namespacedKey = new NamespacedKey(plugin, key);
 
-        String materialName = section.getString("material");
-        if (materialName == null) return null;
+        Bukkit.addRecipe(definition.toBukkitRecipe(plugin));
+        registeredKeys.add(namespacedKey);
 
-        Material material = Material.getMaterial(materialName.toUpperCase());
-        if (material == null) return null;
+        recipeResults.put(key, definition.result().toItemStack(plugin, "result"));
 
-        int amount = section.getInt("amount", 1);
-        ItemStack item = new ItemStack(material, amount);
+        List<Ingredient> flattened = definition.flattenedIngredients();
+        List<ItemStack> ingredients = new ArrayList<>(flattened.size());
+        for (int i = 0; i < flattened.size(); i++) {
+            ingredients.add(flattened.get(i).toItemStack(plugin, "ingredient_" + i));
+        }
+        recipeIngredients.put(key, ingredients);
 
-        return ItemComponents.apply(plugin, item, section.getConfigurationSection("components"), "gen");
+        SpecialDefinition special = definition.special();
+        int amount = definition.result().amountOrDefault();
+        boolean needsOverriding = definition.resultComponents() != null || amount != Ingredient.DEFAULT_AMOUNT;
+        if (needsOverriding && (special != null || definition instanceof TransmuteRecipeDefinition)) {
+            resultOverrides.put(namespacedKey.toString(), new ResultOverride(definition.resultComponents(), amount));
+        }
+
+        if (special != null) {
+            specialRecipes.put(namespacedKey.toString(), special);
+            logger.info("Stored special recipe: " + namespacedKey + " -> " + special.targetMaterial() + " x" + amount
+                    + ", sourceChar=" + special.sourceCharacter()
+                    + ", sourceSlot=" + special.sourceSlot());
+        }
+    }
+
+    private static String describeException(Exception e) {
+        String message = e.getMessage();
+        if (message == null || message.isBlank()) {
+            return e.getClass().getSimpleName();
+        }
+        return message.replaceAll("\\s+at \\[Source:.*$", "").trim();
     }
 }

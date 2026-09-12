@@ -1,5 +1,6 @@
-package org.icarus.tingere.util;
+package org.icarus.tingere.parser;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.papermc.paper.datacomponent.DataComponentTypes;
 import io.papermc.paper.datacomponent.item.CustomModelData;
 import io.papermc.paper.datacomponent.item.Equippable;
@@ -15,30 +16,29 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.Registry;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeModifier;
-import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.EquipmentSlotGroup;
 import org.bukkit.inventory.ItemStack;
 import org.icarus.tingere.Tingere;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.logging.Logger;
 
 @SuppressWarnings("UnstableApiUsage")
-public final class ItemComponents {
+public final class ComponentParser {
 
     private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
-    private static final String[] LEGACY_ATTRIBUTE_PREFIXES = {"generic.",
-            "player.",
-            "zombie.",
-            "horse."};
-
-    private ItemComponents() {
+    private static final String[] LEGACY_ATTRIBUTE_PREFIXES = {"generic.", "player.", "zombie.", "horse."};
+    private ComponentParser() {
     }
 
-    public static ItemStack apply(Tingere plugin, ItemStack item, ConfigurationSection comps, String keyPrefix) {
-        if (item == null || comps == null) {
+    public static ItemStack apply(Tingere plugin, ItemStack item, JsonNode comps, String keyPrefix) {
+        if (item == null || comps == null || !comps.isObject()) {
             return item;
         }
 
@@ -56,44 +56,36 @@ public final class ItemComponents {
         return item;
     }
 
-    private static void applyCustomModelData(ItemStack item, ConfigurationSection comps) {
-        if (!comps.contains("custom-model-data")) {
+    private static void applyCustomModelData(ItemStack item, JsonNode comps) {
+        if (!has(comps, "custom-model-data")) {
             return;
         }
         item.setData(DataComponentTypes.CUSTOM_MODEL_DATA,
-                CustomModelData.customModelData()
-                        .addFloat(comps.getInt("custom-model-data"))
-                        .build());
+                CustomModelData.customModelData().addFloat(intValue(comps, "custom-model-data")).build());
     }
 
-    private static void applyItemModel(Tingere plugin, ItemStack item, ConfigurationSection comps) {
-        if (!comps.contains("item-model")) {
-            return;
-        }
-        NamespacedKey key = parseKey(plugin, comps.getString("item-model"));
+    private static void applyItemModel(Tingere plugin, ItemStack item, JsonNode comps) {
+        NamespacedKey key = parseKey(plugin, text(comps, "item-model"));
         if (key != null) {
             item.setData(DataComponentTypes.ITEM_MODEL, key);
         }
     }
 
-    private static void applyGlint(ItemStack item, ConfigurationSection comps) {
-        if (!comps.isBoolean("glint")) {
-            return;
+    private static void applyGlint(ItemStack item, JsonNode comps) {
+        if (has(comps, "glint")) {
+            item.setData(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE, boolValue(comps, "glint"));
         }
-        item.setData(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE, comps.getBoolean("glint"));
     }
 
-    private static void applyName(ItemStack item, ConfigurationSection comps) {
-        if (comps.contains("display-name")) {
-            String name = comps.getString("display-name");
-            if (name != null) {
-                item.setData(DataComponentTypes.CUSTOM_NAME, MINI_MESSAGE.deserialize(name));
-            }
+    private static void applyName(ItemStack item, JsonNode comps) {
+        String displayName = text(comps, "display-name");
+        if (displayName != null) {
+            item.setData(DataComponentTypes.CUSTOM_NAME, MINI_MESSAGE.deserialize(displayName));
             return;
         }
 
-        String prefix = comps.getString("prefix");
-        String suffix = comps.getString("suffix");
+        String prefix = text(comps, "prefix");
+        String suffix = text(comps, "suffix");
         if (prefix == null && suffix == null) {
             return;
         }
@@ -117,25 +109,25 @@ public final class ItemComponents {
         return Component.translatable(translatable == null ? "" : translatable);
     }
 
-    private static void applyLore(ItemStack item, ConfigurationSection comps) {
-        if (!comps.contains("lore")) {
+    private static void applyLore(ItemStack item, JsonNode comps) {
+        if (!has(comps, "lore")) {
             return;
         }
         List<Component> lore = new ArrayList<>();
-        for (String line : comps.getStringList("lore")) {
+        for (String line : strings(comps, "lore")) {
             lore.add(MINI_MESSAGE.deserialize(line));
         }
         item.setData(DataComponentTypes.LORE, ItemLore.lore(lore));
     }
 
-    private static void applyEnchantments(Tingere plugin, ItemStack item, ConfigurationSection comps) {
-        if (!comps.contains("enchantments")) {
+    private static void applyEnchantments(Tingere plugin, ItemStack item, JsonNode comps) {
+        if (!has(comps, "enchantments")) {
             return;
         }
 
         Logger logger = plugin.getLogger();
         Map<Enchantment, Integer> merged = new HashMap<>(item.getEnchantments());
-        for (String entry : comps.getStringList("enchantments")) {
+        for (String entry : strings(comps, "enchantments")) {
             int separator = entry.lastIndexOf(':');
             if (separator <= 0) {
                 logger.warning("Ignored malformed enchantment entry: " + entry);
@@ -159,8 +151,9 @@ public final class ItemComponents {
         }
     }
 
-    private static void applyAttributes(Tingere plugin, ItemStack item, ConfigurationSection comps, String keyPrefix) {
-        if (!comps.isList("attributes")) {
+    private static void applyAttributes(Tingere plugin, ItemStack item, JsonNode comps, String keyPrefix) {
+        JsonNode attributes = comps.get("attributes");
+        if (attributes == null || !attributes.isArray()) {
             return;
         }
 
@@ -169,24 +162,24 @@ public final class ItemComponents {
         boolean any = false;
         int index = 0;
 
-        for (Map<?, ?> entry : comps.getMapList("attributes")) {
+        for (JsonNode entry : attributes) {
             index++;
-            Object raw = entry.get("type");
-            Attribute attribute = resolveAttribute(raw);
+            String rawType = text(entry, "type");
+            Attribute attribute = resolveAttribute(rawType);
             if (attribute == null) {
-                logger.warning("Ignored unknown attribute type: " + raw);
+                logger.warning("Ignored unknown attribute type: " + rawType);
                 continue;
             }
-            Object amount = entry.get("amount");
-            if (!(amount instanceof Number number)) {
-                logger.warning("Invalid amount value " + amount + "for attribute " + raw);
+            JsonNode amountNode = entry.get("amount");
+            if (amountNode == null || !amountNode.isNumber()) {
+                logger.warning("Invalid amount value " + amountNode + " for attribute " + rawType);
                 continue;
             }
 
             NamespacedKey modifierKey = new NamespacedKey(plugin, keyPrefix + "_attr_" + index);
             AttributeModifier modifier = new AttributeModifier(
-                    modifierKey, number.doubleValue(), resolveOperation(entry.get("operation")));
-            builder.addModifier(attribute, modifier, resolveSlotGroup(entry.get("slot")));
+                    modifierKey, amountNode.doubleValue(), resolveOperation(text(entry, "operation")));
+            builder.addModifier(attribute, modifier, resolveSlotGroup(text(entry, "slot")));
             any = true;
         }
 
@@ -195,18 +188,18 @@ public final class ItemComponents {
         }
     }
 
-    private static Attribute resolveAttribute(Object raw) {
-        if (raw == null) {
+    private static Attribute resolveAttribute(String name) {
+        if (name == null || name.isBlank()) {
             return null;
         }
-        String name = String.valueOf(raw).trim().toLowerCase(Locale.ROOT);
-        Attribute attribute = lookupAttribute(name);
+        String normalized = name.trim().toLowerCase(Locale.ROOT);
+        Attribute attribute = lookupAttribute(normalized);
         if (attribute != null) {
             return attribute;
         }
         for (String legacy : LEGACY_ATTRIBUTE_PREFIXES) {
-            if (name.startsWith(legacy)) {
-                return lookupAttribute(name.substring(legacy.length()));
+            if (normalized.startsWith(legacy)) {
+                return lookupAttribute(normalized.substring(legacy.length()));
             }
         }
         return null;
@@ -221,19 +214,19 @@ public final class ItemComponents {
         return RegistryAccess.registryAccess().getRegistry(key);
     }
 
-    private static AttributeModifier.Operation resolveOperation(Object raw) {
-        if (raw != null) {
+    private static AttributeModifier.Operation resolveOperation(String raw) {
+        if (raw != null && !raw.isBlank()) {
             try {
-                return AttributeModifier.Operation.valueOf(String.valueOf(raw).trim().toUpperCase(Locale.ROOT));
+                return AttributeModifier.Operation.valueOf(raw.trim().toUpperCase(Locale.ROOT));
             } catch (IllegalArgumentException ignored) {
             }
         }
         return AttributeModifier.Operation.ADD_NUMBER;
     }
 
-    private static EquipmentSlotGroup resolveSlotGroup(Object raw) {
-        if (raw != null) {
-            EquipmentSlotGroup group = EquipmentSlotGroup.getByName(String.valueOf(raw).trim());
+    private static EquipmentSlotGroup resolveSlotGroup(String raw) {
+        if (raw != null && !raw.isBlank()) {
+            EquipmentSlotGroup group = EquipmentSlotGroup.getByName(raw.trim());
             if (group != null) {
                 return group;
             }
@@ -241,32 +234,65 @@ public final class ItemComponents {
         return EquipmentSlotGroup.ANY;
     }
 
-    private static void applyMaxDamage(ItemStack item, ConfigurationSection comps) {
-        if (!comps.contains("maxdamage")) {
-            return;
+    private static void applyMaxDamage(ItemStack item, JsonNode comps) {
+        // 依旧历史遗留问题
+        String field = has(comps, "max-damage") ? "max-damage" : "maxdamage";
+        if (has(comps, field)) {
+            item.setData(DataComponentTypes.MAX_DAMAGE, intValue(comps, field));
         }
-        item.setData(DataComponentTypes.MAX_DAMAGE, comps.getInt("maxdamage"));
     }
 
-    private static void applyUnbreakable(ItemStack item, ConfigurationSection comps) {
-        if (comps.getBoolean("unbreakable", false)) {
+    private static void applyUnbreakable(ItemStack item, JsonNode comps) {
+        if (boolValue(comps, "unbreakable")) {
             item.setData(DataComponentTypes.UNBREAKABLE);
         }
     }
 
-    private static void applyEquippable(ItemStack item, ConfigurationSection comps) {
-        if (comps.getBoolean("equippable-on-head", false)) {
+    private static void applyEquippable(ItemStack item, JsonNode comps) {
+        if (boolValue(comps, "equippable-on-head")) {
             item.setData(DataComponentTypes.EQUIPPABLE, Equippable.equippable(EquipmentSlot.HEAD).build());
         }
     }
 
     private static NamespacedKey parseKey(Tingere plugin, String raw) {
-        if (raw == null || raw.isEmpty()) {
+        if (raw == null || raw.isBlank()) {
             return null;
         }
-        if (raw.contains(":")) {
-            return NamespacedKey.fromString(raw);
+        return raw.contains(":")
+                ? NamespacedKey.fromString(raw)
+                : (plugin == null ? NamespacedKey.minecraft(raw) : new NamespacedKey(plugin, raw));
+    }
+
+    // fallbacks
+
+    private static boolean has(JsonNode node, String field) {
+        return node.hasNonNull(field);
+    }
+
+    private static String text(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() ? null : value.asText();
+    }
+
+    private static int intValue(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() ? 0 : value.asInt(0);
+    }
+
+    private static boolean boolValue(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value != null && !value.isNull() && value.asBoolean(false);
+    }
+
+    private static List<String> strings(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || !value.isArray()) {
+            return List.of();
         }
-        return plugin == null ? NamespacedKey.minecraft(raw) : new NamespacedKey(plugin, raw);
+        List<String> result = new ArrayList<>();
+        for (JsonNode entry : value) {
+            result.add(entry.asText());
+        }
+        return result;
     }
 }

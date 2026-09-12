@@ -11,6 +11,8 @@ import org.icarus.tingere.recipe.CookingRecipeDefinition;
 import org.icarus.tingere.recipe.RecipeDefinition;
 import org.icarus.tingere.recipe.ShapedRecipeDefinition;
 import org.icarus.tingere.recipe.ShapelessRecipeDefinition;
+import org.icarus.tingere.recipe.SmithingRecipeDefinition;
+import org.icarus.tingere.recipe.StonecuttingRecipeDefinition;
 import org.icarus.tingere.recipe.TransmuteRecipeDefinition;
 
 import java.io.IOException;
@@ -63,8 +65,10 @@ public final class RecipeParser {
                 payload.put("kind", CookingRecipeDefinition.Kind.of(type).name());
                 yield mapper.treeToValue(payload, CookingRecipeDefinition.class);
             }
+            case "stonecutter" -> mapper.treeToValue(payload, StonecuttingRecipeDefinition.class);
+            case "smithing" -> mapper.treeToValue(payload, SmithingRecipeDefinition.class);
             default -> throw new IllegalArgumentException("unknown recipe type '" + type
-                    + "' (expected shaped, shapeless, transmute, furnace, blast or smoker)");
+                    + "' (expected shaped, shapeless, transmute, furnace, blast, smoker, stonecutter or smithing)");
         };
     }
 

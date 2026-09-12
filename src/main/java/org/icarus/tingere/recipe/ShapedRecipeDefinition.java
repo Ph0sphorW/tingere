@@ -3,7 +3,6 @@ package org.icarus.tingere.recipe;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.Recipe;
-import org.bukkit.inventory.RecipeChoice;
 import org.bukkit.inventory.ShapedRecipe;
 import org.icarus.tingere.Tingere;
 
@@ -60,14 +59,9 @@ public record ShapedRecipeDefinition(@JsonProperty(required = true) String id,
                 new NamespacedKey(plugin, id), result.toItemStack(plugin, "result"));
         recipe.shape(pattern.toArray(String[]::new));
 
-        ingredients.forEach((symbol, ingredient) -> recipe.setIngredient(symbol, toChoice(plugin, ingredient, symbol)));
+        ingredients.forEach((symbol, ingredient) ->
+                recipe.setIngredient(symbol, ingredient.toRecipeChoice(plugin, "ingredient_" + symbol)));
         return recipe;
-    }
-
-    private static RecipeChoice toChoice(Tingere plugin, Ingredient ingredient, char symbol) {
-        return ingredient.matchesExactly()
-                ? new RecipeChoice.ExactChoice(ingredient.toItemStack(plugin, "ingredient_" + symbol))
-                : new RecipeChoice.MaterialChoice(ingredient.material());
     }
 
     @Override

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.RecipeChoice;
 import org.icarus.tingere.Tingere;
 import org.icarus.tingere.parser.ComponentParser;
 
@@ -31,7 +32,20 @@ public record Ingredient(@JsonProperty(required = true) Material material,
         return !"material".equalsIgnoreCase(matchMode);
     }
 
+    public void requireSingle(String field, String recipeType) {
+        if (amount != null && amount != 1) {
+            throw new IllegalArgumentException(
+                    "'" + field + ".amount' must be 1 for " + recipeType + " recipes, got " + amount);
+        }
+    }
+
     public ItemStack toItemStack(Tingere plugin, String keyPrefix) {
         return ComponentParser.apply(plugin, new ItemStack(material, amountOrDefault()), components, keyPrefix);
+    }
+
+    public RecipeChoice toRecipeChoice(Tingere plugin, String keyPrefix) {
+        return matchesExactly()
+                ? new RecipeChoice.ExactChoice(toItemStack(plugin, keyPrefix))
+                : new RecipeChoice.MaterialChoice(material);
     }
 }

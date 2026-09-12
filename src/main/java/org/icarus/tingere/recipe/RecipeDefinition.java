@@ -14,7 +14,9 @@ public sealed interface RecipeDefinition
         permits ShapedRecipeDefinition,
         ShapelessRecipeDefinition,
         TransmuteRecipeDefinition,
-        CookingRecipeDefinition {
+        CookingRecipeDefinition,
+        StonecuttingRecipeDefinition,
+        SmithingRecipeDefinition {
 
     String id();
     Ingredient result();

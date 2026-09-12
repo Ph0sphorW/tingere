@@ -57,10 +57,7 @@ public record CookingRecipeDefinition(@JsonProperty(required = true) String id,
         if (result == null) {
             throw new IllegalArgumentException("missing required field 'result'");
         }
-        if (ingredient.amount() != null && ingredient.amount() != 1) {
-            throw new IllegalArgumentException(
-                    "'ingredient.amount' must be 1 for cooking recipes, got " + ingredient.amount());
-        }
+        ingredient.requireSingle("ingredient", "cooking");
         if (time != null && time <= 0) {
             throw new IllegalArgumentException("'time' must be greater than 0 seconds, got " + time);
         }
@@ -85,9 +82,7 @@ public record CookingRecipeDefinition(@JsonProperty(required = true) String id,
     public Recipe toBukkitRecipe(Tingere plugin) {
         NamespacedKey key = new NamespacedKey(plugin, id);
         ItemStack resultStack = result.toItemStack(plugin, "result");
-        RecipeChoice input = ingredient.matchesExactly()
-                ? new RecipeChoice.ExactChoice(ingredient.toItemStack(plugin, "ingredient"))
-                : new RecipeChoice.MaterialChoice(ingredient.material());
+        RecipeChoice input = ingredient.toRecipeChoice(plugin, "ingredient");
         float exp = (float) experienceOrDefault();
         int ticks = cookingTicks();
 

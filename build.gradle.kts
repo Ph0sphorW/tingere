@@ -1,3 +1,5 @@
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
 plugins {
     java
     id("com.gradleup.shadow") version "9.2.2"
@@ -10,6 +12,7 @@ version = "1.7.0"
 val paperApiVersion = "1.21.11-R0.1-SNAPSHOT"
 val lombokVersion = "1.18.42"
 val jacksonVersion = "2.17.2"
+val cloudVersion = "2.0.0"
 
 repositories {
     mavenCentral()
@@ -22,8 +25,13 @@ dependencies {
     compileOnly("org.projectlombok:lombok:$lombokVersion")
     annotationProcessor("org.projectlombok:lombok:$lombokVersion")
 
-    // 配方 YAML 的解析依赖，需随插件一起打包
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:$jacksonVersion")
+
+    implementation(platform("org.incendo:cloud-minecraft-bom:$cloudVersion"))
+    implementation("org.incendo:cloud-paper")
+    implementation("org.incendo:cloud-minecraft-extras") {
+        exclude(group = "net.kyori")
+    }
 }
 
 java {
@@ -39,16 +47,17 @@ tasks.withType<JavaExec>().configureEach {
     jvmArgs("-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8")
 }
 
-// 未打包依赖的「瘦 jar」改名为 -plain，正式产物由 shadowJar 产出
 tasks.jar {
     archiveClassifier.set("plain")
 }
 
-tasks.shadowJar {
+tasks.named<ShadowJar>("shadowJar") {
     archiveClassifier.set("")
-    // 把依赖重定位到插件命名空间下，避免与服务端或其它插件自带的同名库冲突
     relocate("com.fasterxml.jackson", "org.icarus.tingere.libs.jackson")
     relocate("org.yaml.snakeyaml", "org.icarus.tingere.libs.snakeyaml")
+    relocate("org.incendo", "org.icarus.tingere.libs.cloud")
+    exclude("org/immutables/**")
+    exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")
 }
 
 tasks.runServer {

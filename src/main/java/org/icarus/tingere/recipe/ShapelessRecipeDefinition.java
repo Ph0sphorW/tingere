@@ -1,32 +1,35 @@
 package org.icarus.tingere.recipe;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.RecipeChoice;
 import org.bukkit.inventory.ShapelessRecipe;
 import org.icarus.tingere.Tingere;
-import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
 
-public record ShapelessRecipeDefinition(@NotNull String key,
-                                        @NotNull List<Ingredient> ingredients,
-                                        @NotNull Ingredient result,
+public record ShapelessRecipeDefinition(@JsonProperty(required = true) String id,
+                                        @JsonProperty(required = true) List<Ingredient> ingredients,
+                                        @JsonProperty(required = true) Ingredient result,
                                         SpecialDefinition special) implements RecipeDefinition {
 
     public ShapelessRecipeDefinition {
-        if (key.isBlank()) {
-            throw new IllegalArgumentException("missing required field 'key'");
+        if (id == null || id.isBlank()) {
+            throw new IllegalArgumentException("missing required field 'id'");
         }
-        if (ingredients.isEmpty()) {
+        if (ingredients == null || ingredients.isEmpty()) {
             throw new IllegalArgumentException("'ingredients' must not be empty");
+        }
+        if (result == null) {
+            throw new IllegalArgumentException("missing required field 'result'");
         }
     }
 
     @Override
     public Recipe toBukkitRecipe(Tingere plugin) {
         ShapelessRecipe recipe = new ShapelessRecipe(
-                new NamespacedKey(plugin, key), result.toItemStack(plugin, "result"));
+                new NamespacedKey(plugin, id), result.toItemStack(plugin, "result"));
 
         for (int i = 0; i < ingredients.size(); i++) {
             Ingredient ingredient = ingredients.get(i);

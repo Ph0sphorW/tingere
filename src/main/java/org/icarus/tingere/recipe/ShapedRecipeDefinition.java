@@ -1,29 +1,29 @@
 package org.icarus.tingere.recipe;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.RecipeChoice;
 import org.bukkit.inventory.ShapedRecipe;
 import org.icarus.tingere.Tingere;
-import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-public record ShapedRecipeDefinition(@NotNull String key,
-                                     @NotNull List<String> pattern,
-                                     @NotNull Map<Character, Ingredient> ingredients,
-                                     @NotNull Ingredient result,
+public record ShapedRecipeDefinition(@JsonProperty(required = true) String id,
+                                     @JsonProperty(required = true) List<String> pattern,
+                                     @JsonProperty(required = true) Map<Character, Ingredient> ingredients,
+                                     @JsonProperty(required = true) Ingredient result,
                                      SpecialDefinition special) implements RecipeDefinition {
 
     private static final int MAX_SIZE = 3;
 
     public ShapedRecipeDefinition {
-        if (key.isBlank()) {
-            throw new IllegalArgumentException("missing required field 'key'");
+        if (id == null || id.isBlank()) {
+            throw new IllegalArgumentException("missing required field 'id'");
         }
-        if (pattern.isEmpty()) {
+        if (pattern == null || pattern.isEmpty()) {
             throw new IllegalArgumentException("'pattern' must not be empty");
         }
         if (pattern.size() > MAX_SIZE) {
@@ -38,8 +38,11 @@ public record ShapedRecipeDefinition(@NotNull String key,
                 throw new IllegalArgumentException("'pattern' rows must all have the same width (" + width + ")");
             }
         }
-        if (ingredients.isEmpty()) {
+        if (ingredients == null || ingredients.isEmpty()) {
             throw new IllegalArgumentException("'ingredients' must not be empty");
+        }
+        if (result == null) {
+            throw new IllegalArgumentException("missing required field 'result'");
         }
 
         for (String row : pattern) {
@@ -54,7 +57,7 @@ public record ShapedRecipeDefinition(@NotNull String key,
     @Override
     public Recipe toBukkitRecipe(Tingere plugin) {
         ShapedRecipe recipe = new ShapedRecipe(
-                new NamespacedKey(plugin, key), result.toItemStack(plugin, "result"));
+                new NamespacedKey(plugin, id), result.toItemStack(plugin, "result"));
         recipe.shape(pattern.toArray(String[]::new));
 
         ingredients.forEach((symbol, ingredient) -> recipe.setIngredient(symbol, toChoice(plugin, ingredient, symbol)));

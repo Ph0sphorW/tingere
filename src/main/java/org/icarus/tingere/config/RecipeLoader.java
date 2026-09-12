@@ -176,20 +176,20 @@ public class RecipeLoader {
     }
 
     private void register(RecipeDefinition definition) {
-        String key = definition.key();
-        NamespacedKey namespacedKey = new NamespacedKey(plugin, key);
+        String id = definition.id();
+        NamespacedKey namespacedKey = new NamespacedKey(plugin, id);
 
         Bukkit.addRecipe(definition.toBukkitRecipe(plugin));
         registeredKeys.add(namespacedKey);
 
-        recipeResults.put(key, definition.result().toItemStack(plugin, "result"));
+        recipeResults.put(id, definition.result().toItemStack(plugin, "result"));
 
         List<Ingredient> flattened = definition.flattenedIngredients();
         List<ItemStack> ingredients = new ArrayList<>(flattened.size());
         for (int i = 0; i < flattened.size(); i++) {
             ingredients.add(flattened.get(i).toItemStack(plugin, "ingredient_" + i));
         }
-        recipeIngredients.put(key, ingredients);
+        recipeIngredients.put(id, ingredients);
 
         SpecialDefinition special = definition.special();
         int amount = definition.result().amountOrDefault();

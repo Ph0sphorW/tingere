@@ -1,24 +1,27 @@
 package org.icarus.tingere.recipe;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.bukkit.Material;
-import org.jetbrains.annotations.NotNull;
 
-public record SpecialDefinition(@NotNull Material targetMaterial,
+public record SpecialDefinition(@JsonProperty(required = true) Material targetMaterial,
                                 Boolean copyInput,
-                                @NotNull String sourceCharacter,
-                                @NotNull Integer sourceSlot,
+                                String sourceCharacter,
+                                Integer sourceSlot,
                                 JsonNode components) {
 
     public SpecialDefinition {
+        if (targetMaterial == null) {
+            throw new IllegalArgumentException("missing required field 'target-material'");
+        }
         if (targetMaterial.isAir()) {
             throw new IllegalArgumentException("'special.target-material' must not be air");
         }
-        if (sourceCharacter.length() != 1) {
+        if (sourceCharacter != null && sourceCharacter.length() != 1) {
             throw new IllegalArgumentException(
                     "'special.source-character' must be exactly one character, got '" + sourceCharacter + "'");
         }
-        if (sourceSlot < 0 || sourceSlot > 8) {
+        if (sourceSlot != null && (sourceSlot < 0 || sourceSlot > 8)) {
             throw new IllegalArgumentException("'special.source-slot' must be between 0 and 8, got " + sourceSlot);
         }
     }
@@ -28,6 +31,6 @@ public record SpecialDefinition(@NotNull Material targetMaterial,
     }
 
     public Character sourceCharacterOrNull() {
-        return sourceCharacter.charAt(0);
+        return sourceCharacter == null ? null : sourceCharacter.charAt(0);
     }
 }

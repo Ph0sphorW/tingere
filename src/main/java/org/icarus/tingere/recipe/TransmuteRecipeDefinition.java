@@ -1,24 +1,39 @@
 package org.icarus.tingere.recipe;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.Recipe;
 import org.bukkit.inventory.RecipeChoice;
 import org.bukkit.inventory.TransmuteRecipe;
 import org.icarus.tingere.Tingere;
-import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
 
-public record TransmuteRecipeDefinition(@NotNull String key,
-                                        @NotNull Ingredient input,
-                                        @NotNull Ingredient material,
-                                        @NotNull Ingredient result,
+public record TransmuteRecipeDefinition(@JsonProperty(required = true) String id,
+                                        @JsonProperty(required = true) Ingredient input,
+                                        @JsonProperty(required = true) Ingredient material,
+                                        @JsonProperty(required = true) Ingredient result,
                                         SpecialDefinition special) implements RecipeDefinition {
+
+    public TransmuteRecipeDefinition {
+        if (id == null || id.isBlank()) {
+            throw new IllegalArgumentException("missing required field 'id'");
+        }
+        if (input == null) {
+            throw new IllegalArgumentException("missing required field 'input'");
+        }
+        if (material == null) {
+            throw new IllegalArgumentException("missing required field 'material'");
+        }
+        if (result == null) {
+            throw new IllegalArgumentException("missing required field 'result'");
+        }
+    }
 
     @Override
     public Recipe toBukkitRecipe(Tingere plugin) {
         return new TransmuteRecipe(
-                new NamespacedKey(plugin, key),
+                new NamespacedKey(plugin, id),
                 result.material(),
                 new RecipeChoice.MaterialChoice(input.material()),
                 new RecipeChoice.ExactChoice(material.toItemStack(plugin, "material")));

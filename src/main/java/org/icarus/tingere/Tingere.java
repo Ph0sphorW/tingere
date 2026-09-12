@@ -2,7 +2,7 @@ package org.icarus.tingere;
 
 import lombok.Getter;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.icarus.tingere.command.TingereCommandExecutor;
+import org.icarus.tingere.command.TingereCommandManager;
 import org.icarus.tingere.config.RecipeLoader;
 import org.icarus.tingere.listener.CraftListener;
 
@@ -18,10 +18,7 @@ public final class Tingere extends JavaPlugin {
     public void onEnable() {
         logger.info("Tingere - Custom recipe loader");
         logger.info("Made by Ph0sphorW & Annieawa");
-        var command = getCommand("tingere");
-        if (command != null) {
-            command.setExecutor(new TingereCommandExecutor(this));
-        }
+        new TingereCommandManager(this).register();
         getServer().getPluginManager().registerEvents(new CraftListener(this), this);
         reloadRecipes();
     }
@@ -38,9 +35,5 @@ public final class Tingere extends JavaPlugin {
         } catch (Exception e) {
             logger.log(Level.SEVERE, "An error occurred while trying to reload the recipes:", e);
         }
-    }
-
-    public static Tingere getInstance() {
-        return getPlugin(Tingere.class);
     }
 }

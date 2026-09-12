@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 import org.bukkit.Material;
+import org.icarus.tingere.recipe.CookingRecipeDefinition;
 import org.icarus.tingere.recipe.RecipeDefinition;
 import org.icarus.tingere.recipe.ShapedRecipeDefinition;
 import org.icarus.tingere.recipe.ShapelessRecipeDefinition;
@@ -49,22 +50,36 @@ public final class RecipeParser {
             throw new IllegalArgumentException("missing required field 'type'");
         }
 
-        String type = typeNode.asText();
-        Class<? extends RecipeDefinition> target = switch (type.toLowerCase(Locale.ROOT)) {
-            case "shaped" -> ShapedRecipeDefinition.class;
-            case "shapeless" -> ShapelessRecipeDefinition.class;
-            case "transmute" -> TransmuteRecipeDefinition.class;
-            default -> throw new IllegalArgumentException(
-                    "unknown recipe type '" + type + "' (expected shaped, shapeless or transmute)");
-        };
-
+        String type = typeNode.asText().toLowerCase(Locale.ROOT);
         ObjectNode payload = node.deepCopy();
         payload.remove("type");
-        return mapper.treeToValue(payload, target);
+        migrateLegacyKey(payload);
+
+        return switch (type) {
+            case "shaped" -> mapper.treeToValue(payload, ShapedRecipeDefinition.class);
+            case "shapeless" -> mapper.treeToValue(payload, ShapelessRecipeDefinition.class);
+            case "transmute" -> mapper.treeToValue(payload, TransmuteRecipeDefinition.class);
+            case "furnace", "blast", "smoker" -> {
+                payload.put("kind", CookingRecipeDefinition.Kind.of(type).name());
+                yield mapper.treeToValue(payload, CookingRecipeDefinition.class);
+            }
+            default -> throw new IllegalArgumentException("unknown recipe type '" + type
+                    + "' (expected shaped, shapeless, transmute, furnace, blast or smoker)");
+        };
+    }
+
+    private static void migrateLegacyKey(ObjectNode payload) {
+        if (!payload.hasNonNull("key")) {
+            return;
+        }
+        if (payload.hasNonNull("id")) {
+            throw new IllegalArgumentException("both 'id' and the deprecated 'key' are set; Should keep 'id' only");
+        }
+        payload.set("id", payload.remove("key"));
     }
 
     public static String labelOf(JsonNode node, String fallback) {
-        JsonNode key = node.get("key");
-        return key == null || key.isNull() ? fallback : key.asText();
+        JsonNode id = node.hasNonNull("id") ? node.get("id") : node.get("key");
+        return id == null || id.isNull() ? fallback : id.asText();
     }
 }

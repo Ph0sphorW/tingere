@@ -1,13 +1,13 @@
 package org.icarus.tingere.recipe;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
 import org.icarus.tingere.Tingere;
 import org.icarus.tingere.parser.ComponentParser;
-import org.jetbrains.annotations.NotNull;
 
-public record Ingredient(@NotNull Material material,
+public record Ingredient(@JsonProperty(required = true) Material material,
                          Integer amount,
                          String matchMode,
                          JsonNode components) {
@@ -15,6 +15,9 @@ public record Ingredient(@NotNull Material material,
     public static final int DEFAULT_AMOUNT = 1;
 
     public Ingredient {
+        if (material == null) {
+            throw new IllegalArgumentException("missing required field 'material'");
+        }
         if (material.isAir()) {
             throw new IllegalArgumentException("'material' must not be air");
         }

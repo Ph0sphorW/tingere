@@ -23,6 +23,7 @@ import org.incendo.cloud.parser.standard.StringParser;
 import org.incendo.cloud.permission.PredicatePermission;
 import org.incendo.cloud.suggestion.SuggestionProvider;
 import org.icarus.tingere.Tingere;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.HashSet;
 import java.util.List;
@@ -216,7 +217,8 @@ public final class TingereCommandManager {
                 context -> sender(context.context()).sendRichMessage("<red>参数无效: " + describe(context.exception())));
     }
 
-    private static String describe(Throwable throwable) {
+    // 过编译用的
+    private static String describe(@NotNull Throwable throwable) {
         for (Throwable current = throwable; current != null; current = current.getCause()) {
             String message = current.getMessage();
             if (message != null && !message.isBlank()) {

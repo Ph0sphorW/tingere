@@ -3,7 +3,6 @@ package org.icarus.tingere.recipe;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.Recipe;
-import org.bukkit.inventory.RecipeChoice;
 import org.bukkit.inventory.ShapelessRecipe;
 import org.icarus.tingere.Tingere;
 
@@ -32,10 +31,7 @@ public record ShapelessRecipeDefinition(@JsonProperty(required = true) String id
                 new NamespacedKey(plugin, id), result.toItemStack(plugin, "result"));
 
         for (int i = 0; i < ingredients.size(); i++) {
-            Ingredient ingredient = ingredients.get(i);
-            recipe.addIngredient(ingredient.matchesExactly()
-                    ? new RecipeChoice.ExactChoice(ingredient.toItemStack(plugin, "ingredient_" + i))
-                    : new RecipeChoice.MaterialChoice(ingredient.material()));
+            recipe.addIngredient(ingredients.get(i).toRecipeChoice(plugin, "ingredient_" + i));
         }
         return recipe;
     }

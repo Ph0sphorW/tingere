@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "org.icarus"
-version = "1.9.0"
+version = "1.8.0"
 
 val paperApiVersion = "1.21.11-R0.1-SNAPSHOT"
 val lombokVersion = "1.18.42"

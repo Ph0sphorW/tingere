@@ -18,6 +18,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -47,12 +49,17 @@ public class RecipeLoader {
 
     private final Map<String, Set<String>> fileRecipeIds = new HashMap<>();
 
+    private final Map<String, String> fileFingerprints = new HashMap<>();
+
     public RecipeLoader(Tingere plugin) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
     }
 
     public record ReloadReport(String relative, int removed, int loaded) {
+    }
+
+    public record FullReloadReport(int total, int reloaded, int skippedFiles) {
     }
 
     public SpecialDefinition getSpecialRecipeInfo(String fullKey) {
@@ -107,19 +114,18 @@ public class RecipeLoader {
                 toRemove.add(keyed.getKey());
             }
         }
-        toRemove.forEach(key -> Bukkit.removeRecipe(key, false));
+        toRemove.forEach(Bukkit::removeRecipe);
 
         registeredKeys.clear();
         fileRecipeIds.clear();
+        fileFingerprints.clear();
         recipeResults.clear();
         recipeIngredients.clear();
         specialRecipes.clear();
         resultOverrides.clear();
     }
 
-    public int reloadAll() {
-        removeAllQuiet();
-
+    public FullReloadReport reloadAll() {
         Path base = recipesDirectory();
         if (!Files.isDirectory(base)) {
             if (base.toFile().mkdirs()) {
@@ -127,16 +133,45 @@ public class RecipeLoader {
             } else {
                 logger.warning("Recipe folder is not a directory: " + base.toAbsolutePath());
             }
-            return 0;
+            return new FullReloadReport(registeredKeys.size(), 0, 0);
         }
 
-        int count = 0;
-        for (String relative : listRecipeFiles()) {
-            count += loadRecipesFromFile(base.resolve(relative), relative);
+        List<String> present = listRecipeFiles();
+        Set<String> presentFiles = new HashSet<>(present);
+
+        for (String known : new ArrayList<>(fileRecipeIds.keySet())) {
+            if (!presentFiles.contains(known)) {
+                int removed = unregisterFile(known);
+                fileFingerprints.remove(known);
+                logger.info("Unloaded " + removed + " recipe(s) from removed file " + known + ".");
+            }
         }
 
-        resendRecipes();
-        return count;
+        int reloaded = 0;
+        int skipped = 0;
+        for (String relative : present) {
+            Path path = base.resolve(relative);
+            String fingerprint;
+            try {
+                fingerprint = fingerprintOf(path);
+            } catch (IOException e) {
+                logger.warning("Failed to read " + relative + ": " + e.getMessage());
+                continue;
+            }
+
+            if (fingerprint.equals(fileFingerprints.get(relative))) {
+                skipped++;
+                continue;
+            }
+
+            unregisterFile(relative);
+            reloaded += loadRecipesFromFile(path, relative, fingerprint);
+        }
+
+        if (skipped > 0) {
+            logger.info("Skipped " + skipped + " unchanged recipe file(s).");
+        }
+        return new FullReloadReport(registeredKeys.size(), reloaded, skipped);
     }
 
     public ReloadReport reloadFile(String rawRelative) throws IOException {
@@ -151,9 +186,7 @@ public class RecipeLoader {
         }
 
         int removed = unregisterFile(relative);
-        int loaded = loadRecipesFromFile(file, relative);
-
-        resendRecipes();
+        int loaded = loadRecipesFromFile(file, relative, fingerprintOf(file));
         return new ReloadReport(relative, removed, loaded);
     }
 
@@ -191,7 +224,7 @@ public class RecipeLoader {
         }
         for (String id : ids) {
             NamespacedKey key = new NamespacedKey(plugin, id);
-            Bukkit.removeRecipe(key, false);
+            Bukkit.removeRecipe(key);
             registeredKeys.remove(key);
             recipeResults.remove(id);
             recipeIngredients.remove(id);
@@ -209,8 +242,18 @@ public class RecipeLoader {
         return plugin.getName().toLowerCase(Locale.ROOT);
     }
 
-    private void resendRecipes() {
-        Bukkit.updateRecipes();
+    private static String fingerprintOf(Path path) throws IOException {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(path));
+            StringBuilder builder = new StringBuilder(digest.length * 2);
+            for (byte value : digest) {
+                builder.append(Character.forDigit((value >> 4) & 0xF, 16));
+                builder.append(Character.forDigit(value & 0xF, 16));
+            }
+            return builder.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is required by the Java platform", e);
+        }
     }
 
     private static boolean isYamlFile(Path path) {
@@ -218,7 +261,7 @@ public class RecipeLoader {
         return name.endsWith(".yml") || name.endsWith(".yaml");
     }
 
-    private int loadRecipesFromFile(Path path, String relative) {
+    private int loadRecipesFromFile(Path path, String relative, String fingerprint) {
         JsonNode root;
         try {
             root = parser.read(path);
@@ -226,6 +269,9 @@ public class RecipeLoader {
             logger.warning("Failed to parse " + relative + ": " + describeException(e));
             return 0;
         }
+
+        // 无论解析出多少配方都记录指纹：内容未变时不必重复读盘与报警
+        fileFingerprints.put(relative, fingerprint);
 
         if (root.isMissingNode() || root.isNull()) {
             logger.warning("Ignored empty recipe file: " + relative);
@@ -271,7 +317,9 @@ public class RecipeLoader {
         String id = definition.id();
         NamespacedKey namespacedKey = new NamespacedKey(plugin, id);
 
-        Bukkit.addRecipe(definition.toBukkitRecipe(plugin), false);
+        // 注意：不能传 resendRecipes=false —— Paper 1.21.11 忽略该参数，每成功一次都会
+        // 向所有在线玩家重发完整配方表，故这里只能靠「减少调用次数」控制开销
+        Bukkit.addRecipe(definition.toBukkitRecipe(plugin));
         registeredKeys.add(namespacedKey);
         ids.add(id);
 

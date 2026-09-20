@@ -26,9 +26,12 @@ public final class Tingere extends JavaPlugin {
     public void reloadRecipes() {
         try {
             long start = System.currentTimeMillis();
-            int count = recipeLoader.reloadAll();
+            RecipeLoader.FullReloadReport report = recipeLoader.reloadAll();
             long time = System.currentTimeMillis() - start;
-            logger.info("Successfully reloaded " + count + " recipes in " + time + "ms");
+            logger.info("Reloaded " + report.reloaded() + " recipe(s) from "
+                    + (report.skippedFiles() > 0 ? "changed files, " + report.skippedFiles() + " file(s) unchanged"
+                    : "all files")
+                    + "; " + report.total() + " recipe(s) active in " + time + "ms");
         } catch (Exception e) {
             logger.log(Level.SEVERE, "An error occurred while trying to reload the recipes:", e);
         }

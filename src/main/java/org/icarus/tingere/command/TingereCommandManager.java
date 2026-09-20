@@ -95,8 +95,11 @@ public final class TingereCommandManager {
     private void reloadRecipes(CommandSender sender, String rawFile) {
         if (rawFile == null || rawFile.isBlank()) {
             long start = System.currentTimeMillis();
-            plugin.reloadRecipes();
-            sender.sendRichMessage("<green>配方已全部重载，耗时 " + (System.currentTimeMillis() - start) + "ms");
+            RecipeLoader.FullReloadReport report = plugin.getRecipeLoader().reloadAll();
+            sender.sendRichMessage("<green>配方已重载：当前共 <yellow>" + report.total() + "</yellow> 个"
+                    + "（本次重新加载 " + report.reloaded() + " 个"
+                    + (report.skippedFiles() > 0 ? "，跳过 " + report.skippedFiles() + " 个未改动的文件" : "")
+                    + "），耗时 " + (System.currentTimeMillis() - start) + "ms");
             return;
         }
 

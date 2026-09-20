@@ -1,5 +1,5 @@
 name: tingere
-version: 1.8.0
+version: 1.9.1
 main: org.icarus.tingere.Tingere
 api-version: "1.21"
 authors: ["Annieawa", "Ph0sphorW"]

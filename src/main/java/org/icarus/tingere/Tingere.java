@@ -26,10 +26,7 @@ public final class Tingere extends JavaPlugin {
     public void reloadRecipes() {
         try {
             long start = System.currentTimeMillis();
-
-            recipeLoader.removeAllPluginRecipes();
-            int count = recipeLoader.loadAllRecipes();
-
+            int count = recipeLoader.reloadAll();
             long time = System.currentTimeMillis() - start;
             logger.info("Successfully reloaded " + count + " recipes in " + time + "ms");
         } catch (Exception e) {

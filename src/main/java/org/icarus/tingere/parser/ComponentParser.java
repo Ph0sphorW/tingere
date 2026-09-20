@@ -29,6 +29,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.logging.Logger;
 
+/**
+ * 你会一直顺
+ * 目前只支持常见格式
+ */
 @SuppressWarnings("UnstableApiUsage")
 public final class ComponentParser {
 

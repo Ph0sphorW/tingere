@@ -23,17 +23,24 @@ import org.incendo.cloud.parser.standard.StringParser;
 import org.incendo.cloud.permission.PredicatePermission;
 import org.incendo.cloud.suggestion.SuggestionProvider;
 import org.icarus.tingere.Tingere;
+import org.icarus.tingere.config.RecipeLoader;
 import org.jetbrains.annotations.NotNull;
 
+import java.io.IOException;
+import java.nio.file.NoSuchFileException;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 public final class TingereCommandManager {
 
     private static final String ROOT = "tingere";
     private static final String ADMIN_PERMISSION = "tingere.admin";
+    private static final Pattern SAFE_FILE_ARG = Pattern.compile("[A-Za-z0-9_\\-./]+");
+    private static final int CANDIDATE_LIMIT = 10;
 
     private final Tingere plugin;
 
@@ -79,14 +86,54 @@ public final class TingereCommandManager {
 
     private void registerReloadCommand() {
         commandManager.command(root()
-                .literal("reload", Description.of("重新加载全部配方文件"))
+                .literal("reload", Description.of("重载配方文件；可选只重载某一个文件"))
+                .optional("file", StringParser.greedyStringParser(), recipeFileSuggestions())
                 .permission(adminPermission())
-                .handler(context -> {
-                    CommandSender sender = sender(context);
-                    long start = System.currentTimeMillis();
-                    plugin.reloadRecipes();
-                    sender.sendRichMessage("<green>配方重载完成，耗时 " + (System.currentTimeMillis() - start) + "ms");
-                }));
+                .handler(context -> reloadRecipes(sender(context), context.getOrDefault("file", null))));
+    }
+
+    private void reloadRecipes(CommandSender sender, String rawFile) {
+        if (rawFile == null || rawFile.isBlank()) {
+            long start = System.currentTimeMillis();
+            plugin.reloadRecipes();
+            sender.sendRichMessage("<green>配方已全部重载，耗时 " + (System.currentTimeMillis() - start) + "ms");
+            return;
+        }
+
+        String file = RecipeLoader.unquote(rawFile);
+        long start = System.currentTimeMillis();
+        try {
+            RecipeLoader.ReloadReport report = plugin.getRecipeLoader().reloadFile(file);
+            sender.sendRichMessage("<green>已重载 <yellow>" + report.relative() + "</yellow>"
+                    + "：移除 " + report.removed() + " 个，加载 " + report.loaded() + " 个"
+                    + "，耗时 " + (System.currentTimeMillis() - start) + "ms");
+        } catch (NoSuchFileException e) {
+            sender.sendRichMessage("<red>未找到配方文件: " + file);
+            List<String> candidates = plugin.getRecipeLoader().listRecipeFiles();
+            if (!candidates.isEmpty()) {
+                String shown = candidates.stream()
+                        .limit(CANDIDATE_LIMIT)
+                        .map(TingereCommandManager::quoteIfNeeded)
+                        .collect(Collectors.joining("<gray>, <yellow>"));
+                sender.sendRichMessage("<gray>当前共 " + candidates.size() + " 个文件，例如：<yellow>" + shown);
+            }
+        } catch (IOException e) {
+            sender.sendRichMessage("<red>重载 " + file + " 失败: " + e.getMessage());
+        }
+    }
+
+    private SuggestionProvider<Source> recipeFileSuggestions() {
+        return SuggestionProvider.blockingStrings((context, input) -> {
+            String typed = RecipeLoader.unquote(input.remainingInput()).toLowerCase(Locale.ROOT);
+            return plugin.getRecipeLoader().listRecipeFiles().stream()
+                    .filter(path -> path.toLowerCase(Locale.ROOT).startsWith(typed))
+                    .map(TingereCommandManager::quoteIfNeeded)
+                    .toList();
+        });
+    }
+
+    private static String quoteIfNeeded(String path) {
+        return SAFE_FILE_ARG.matcher(path).matches() ? path : '"' + path + '"';
     }
 
     private void registerGetCommands() {

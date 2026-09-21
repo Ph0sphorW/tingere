@@ -1,12 +1,10 @@
 package org.icarus.tingere.config;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import org.bukkit.Bukkit;
-import org.bukkit.Keyed;
 import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.Recipe;
 import org.icarus.tingere.Tingere;
+import org.icarus.tingere.nms.RecipeTransaction;
 import org.icarus.tingere.parser.RecipeParser;
 import org.icarus.tingere.recipe.Ingredient;
 import org.icarus.tingere.recipe.RecipeDefinition;
@@ -62,6 +60,9 @@ public class RecipeLoader {
     public record FullReloadReport(int total, int reloaded, int skippedFiles) {
     }
 
+    private record ChangedFile(String relative, Path path, String fingerprint) {
+    }
+
     public SpecialDefinition getSpecialRecipeInfo(String fullKey) {
         return specialRecipes.get(fullKey);
     }
@@ -104,27 +105,6 @@ public class RecipeLoader {
         }
     }
 
-    private void removeAllQuiet() {
-        List<NamespacedKey> toRemove = new ArrayList<>();
-        Iterator<Recipe> iterator = Bukkit.recipeIterator();
-        while (iterator.hasNext()) {
-            Recipe recipe = iterator.next();
-            if (recipe instanceof Keyed keyed
-                    && keyed.getKey().getNamespace().equals(namespace())) {
-                toRemove.add(keyed.getKey());
-            }
-        }
-        toRemove.forEach(Bukkit::removeRecipe);
-
-        registeredKeys.clear();
-        fileRecipeIds.clear();
-        fileFingerprints.clear();
-        recipeResults.clear();
-        recipeIngredients.clear();
-        specialRecipes.clear();
-        resultOverrides.clear();
-    }
-
     public FullReloadReport reloadAll() {
         Path base = recipesDirectory();
         if (!Files.isDirectory(base)) {
@@ -139,15 +119,14 @@ public class RecipeLoader {
         List<String> present = listRecipeFiles();
         Set<String> presentFiles = new HashSet<>(present);
 
+        List<String> vanished = new ArrayList<>();
         for (String known : new ArrayList<>(fileRecipeIds.keySet())) {
             if (!presentFiles.contains(known)) {
-                int removed = unregisterFile(known);
-                fileFingerprints.remove(known);
-                logger.info("Unloaded " + removed + " recipe(s) from removed file " + known + ".");
+                vanished.add(known);
             }
         }
 
-        int reloaded = 0;
+        List<ChangedFile> changed = new ArrayList<>();
         int skipped = 0;
         for (String relative : present) {
             Path path = base.resolve(relative);
@@ -163,9 +142,22 @@ public class RecipeLoader {
                 skipped++;
                 continue;
             }
+            changed.add(new ChangedFile(relative, path, fingerprint));
+        }
 
-            unregisterFile(relative);
-            reloaded += loadRecipesFromFile(path, relative, fingerprint);
+        int reloaded = 0;
+        if (!vanished.isEmpty() || !changed.isEmpty()) {
+            try (RecipeTransaction transaction = RecipeTransaction.begin(plugin)) {
+                for (String known : vanished) {
+                    int removed = unregisterFile(transaction, known);
+                    fileFingerprints.remove(known);
+                    logger.info("Unloaded " + removed + " recipe(s) from removed file " + known + ".");
+                }
+                for (ChangedFile file : changed) {
+                    unregisterFile(transaction, file.relative());
+                    reloaded += loadRecipesFromFile(transaction, file.path(), file.relative(), file.fingerprint());
+                }
+            }
         }
 
         if (skipped > 0) {
@@ -185,9 +177,12 @@ public class RecipeLoader {
             throw new NoSuchFileException(relative + " (not a .yml or .yaml file)");
         }
 
-        int removed = unregisterFile(relative);
-        int loaded = loadRecipesFromFile(file, relative, fingerprintOf(file));
-        return new ReloadReport(relative, removed, loaded);
+        String fingerprint = fingerprintOf(file);
+        try (RecipeTransaction transaction = RecipeTransaction.begin(plugin)) {
+            int removed = unregisterFile(transaction, relative);
+            int loaded = loadRecipesFromFile(transaction, file, relative, fingerprint);
+            return new ReloadReport(relative, removed, loaded);
+        }
     }
 
     public static String unquote(String raw) {
@@ -217,29 +212,28 @@ public class RecipeLoader {
         return resolved;
     }
 
-    private int unregisterFile(String relative) {
+    private int unregisterFile(RecipeTransaction transaction, String relative) {
         Set<String> ids = fileRecipeIds.remove(relative);
         if (ids == null || ids.isEmpty()) {
             return 0;
         }
+        int removed = 0;
         for (String id : ids) {
             NamespacedKey key = new NamespacedKey(plugin, id);
-            Bukkit.removeRecipe(key);
+            if (transaction.remove(key)) {
+                removed++;
+            }
             registeredKeys.remove(key);
             recipeResults.remove(id);
             recipeIngredients.remove(id);
             specialRecipes.remove(key.toString());
             resultOverrides.remove(key.toString());
         }
-        return ids.size();
+        return removed;
     }
 
     private static String toRelative(Path base, Path path) {
         return base.relativize(path).toString().replace('\\', '/');
-    }
-
-    private String namespace() {
-        return plugin.getName().toLowerCase(Locale.ROOT);
     }
 
     private static String fingerprintOf(Path path) throws IOException {
@@ -261,7 +255,7 @@ public class RecipeLoader {
         return name.endsWith(".yml") || name.endsWith(".yaml");
     }
 
-    private int loadRecipesFromFile(Path path, String relative, String fingerprint) {
+    private int loadRecipesFromFile(RecipeTransaction transaction, Path path, String relative, String fingerprint) {
         JsonNode root;
         try {
             root = parser.read(path);
@@ -270,7 +264,6 @@ public class RecipeLoader {
             return 0;
         }
 
-        // 无论解析出多少配方都记录指纹：内容未变时不必重复读盘与报警
         fileFingerprints.put(relative, fingerprint);
 
         if (root.isMissingNode() || root.isNull()) {
@@ -285,12 +278,12 @@ public class RecipeLoader {
         Set<String> ids = new HashSet<>();
         int loaded = 0;
         if (root.has("type")) {
-            loaded += tryRegister(root, relative, RecipeParser.labelOf(root, relative), ids) ? 1 : 0;
+            loaded += tryRegister(transaction, root, relative, RecipeParser.labelOf(root, relative), ids) ? 1 : 0;
         } else {
             Iterator<Map.Entry<String, JsonNode>> fields = root.fields();
             while (fields.hasNext()) {
                 Map.Entry<String, JsonNode> entry = fields.next();
-                loaded += tryRegister(entry.getValue(), relative, entry.getKey(), ids) ? 1 : 0;
+                loaded += tryRegister(transaction, entry.getValue(), relative, entry.getKey(), ids) ? 1 : 0;
             }
         }
 
@@ -303,9 +296,10 @@ public class RecipeLoader {
         return loaded;
     }
 
-    private boolean tryRegister(JsonNode node, String relative, String label, Set<String> ids) {
+    private boolean tryRegister(RecipeTransaction transaction, JsonNode node, String relative, String label,
+            Set<String> ids) {
         try {
-            register(parser.bind(node), ids);
+            register(transaction, parser.bind(node), ids);
             return true;
         } catch (Exception e) {
             logger.warning("Skipped recipe '" + label + "' in " + relative + ": " + describeException(e));
@@ -313,13 +307,11 @@ public class RecipeLoader {
         }
     }
 
-    private void register(RecipeDefinition definition, Set<String> ids) {
+    private void register(RecipeTransaction transaction, RecipeDefinition definition, Set<String> ids) {
         String id = definition.id();
         NamespacedKey namespacedKey = new NamespacedKey(plugin, id);
 
-        // 注意：不能传 resendRecipes=false —— Paper 1.21.11 忽略该参数，每成功一次都会
-        // 向所有在线玩家重发完整配方表，故这里只能靠「减少调用次数」控制开销
-        Bukkit.addRecipe(definition.toBukkitRecipe(plugin));
+        transaction.add(definition.toBukkitRecipe(plugin));
         registeredKeys.add(namespacedKey);
         ids.add(id);
 

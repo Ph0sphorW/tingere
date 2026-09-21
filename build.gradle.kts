@@ -4,10 +4,11 @@ plugins {
     java
     id("com.gradleup.shadow") version "9.2.2"
     id("xyz.jpenilla.run-paper") version "3.0.2"
+    id("io.papermc.paperweight.userdev") version "2.0.0-SNAPSHOT"
 }
 
 group = "org.icarus"
-version = "1.9.1"
+version = "1.10.0"
 
 val paperApiVersion = "1.21.11-R0.1-SNAPSHOT"
 val lombokVersion = "1.18.42"
@@ -20,6 +21,8 @@ repositories {
 }
 
 dependencies {
+    paperweight.paperDevBundle("1.21.11-R0.1-SNAPSHOT")
+
     compileOnly("io.papermc.paper:paper-api:$paperApiVersion")
 
     compileOnly("org.projectlombok:lombok:$lombokVersion")

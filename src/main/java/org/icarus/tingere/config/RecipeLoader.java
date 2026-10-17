@@ -3,12 +3,19 @@ package org.icarus.tingere.config;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.RecipeChoice;
 import org.icarus.tingere.Tingere;
+import org.icarus.tingere.component.ComponentApplier;
 import org.icarus.tingere.nms.RecipeTransaction;
+import org.icarus.tingere.parser.ParseContext;
+import org.icarus.tingere.parser.ParseProblem;
+import org.icarus.tingere.parser.ParseResult;
 import org.icarus.tingere.parser.RecipeParser;
 import org.icarus.tingere.recipe.Ingredient;
 import org.icarus.tingere.recipe.RecipeDefinition;
+import org.icarus.tingere.recipe.ResolvedRecipe;
 import org.icarus.tingere.recipe.ResultOverride;
+import org.icarus.tingere.recipe.ShapedRecipeDefinition;
 import org.icarus.tingere.recipe.SpecialDefinition;
 import org.icarus.tingere.recipe.TransmuteRecipeDefinition;
 
@@ -29,6 +36,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class RecipeLoader {
@@ -41,17 +49,25 @@ public class RecipeLoader {
 
     private final Map<String, ItemStack> recipeResults = new HashMap<>();
     private final Map<String, List<ItemStack>> recipeIngredients = new HashMap<>();
+    private final Map<String, List<Ingredient.Matcher>> ingredientMatchers = new HashMap<>();
     private final Map<String, SpecialDefinition> specialRecipes = new HashMap<>();
+    private final Map<String, ComponentApplier.Parsed> specialComponentParses = new HashMap<>();
     private final Map<String, ResultOverride> resultOverrides = new HashMap<>();
+    private final Map<String, SpecialSource> specialSources = new HashMap<>();
     private final Set<NamespacedKey> registeredKeys = new HashSet<>();
 
     private final Map<String, Set<String>> fileRecipeIds = new HashMap<>();
 
     private final Map<String, String> fileFingerprints = new HashMap<>();
 
+    private boolean hasDuplicatedFiles;
+
     public RecipeLoader(Tingere plugin) {
         this.plugin = plugin;
         this.logger = plugin.getLogger();
+    }
+
+    public record SpecialSource(int slot, RecipeChoice choice, Ingredient.Matcher matcher) {
     }
 
     public record ReloadReport(String relative, int removed, int loaded) {
@@ -63,6 +79,10 @@ public class RecipeLoader {
     private record ChangedFile(String relative, Path path, String fingerprint) {
     }
 
+    public SpecialSource getSpecialSource(String fullKey) {
+        return specialSources.get(fullKey);
+    }
+
     public SpecialDefinition getSpecialRecipeInfo(String fullKey) {
         return specialRecipes.get(fullKey);
     }
@@ -71,8 +91,16 @@ public class RecipeLoader {
         return resultOverrides.get(fullKey);
     }
 
+    public ComponentApplier.Parsed getSpecialParsed(String fullKey) {
+        return specialComponentParses.get(fullKey);
+    }
+
     public List<ItemStack> getIngredients(String key) {
         return recipeIngredients.get(key);
+    }
+
+    public List<Ingredient.Matcher> getIngredientMatchers(String fullKey) {
+        return ingredientMatchers.get(fullKey);
     }
 
     public Set<NamespacedKey> getRegisteredKeys() {
@@ -87,14 +115,22 @@ public class RecipeLoader {
         return recipeResults.get(key);
     }
 
+    public String fileOf(String recipeId) {
+        for (Map.Entry<String, Set<String>> entry : fileRecipeIds.entrySet()) {
+            if (entry.getValue().contains(recipeId)) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
+
     public List<String> listRecipeFiles() {
         Path base = recipesDirectory();
         if (!Files.isDirectory(base)) {
             return List.of();
         }
         try (Stream<Path> paths = Files.walk(base)) {
-            return paths
-                    .filter(Files::isRegularFile)
+            return paths.filter(Files::isRegularFile)
                     .filter(RecipeLoader::isYamlFile)
                     .map(path -> toRelative(base, path))
                     .sorted()
@@ -108,6 +144,15 @@ public class RecipeLoader {
     public FullReloadReport reloadAll() {
         Path base = recipesDirectory();
         if (!Files.isDirectory(base)) {
+            if (!fileRecipeIds.isEmpty()) {
+                try (RecipeTransaction transaction = RecipeTransaction.begin(plugin)) {
+                    for (String known : new ArrayList<>(fileRecipeIds.keySet())) {
+                        int removed = unregisterFile(transaction, known);
+                        fileFingerprints.remove(known);
+                        logger.info("Unloaded " + removed + " recipe(s) from removed file " + known + ".");
+                    }
+                }
+            }
             if (base.toFile().mkdirs()) {
                 logger.info("Created recipe folder: " + base.toAbsolutePath());
             } else {
@@ -155,7 +200,10 @@ public class RecipeLoader {
                 }
                 for (ChangedFile file : changed) {
                     unregisterFile(transaction, file.relative());
-                    reloaded += loadRecipesFromFile(transaction, file.path(), file.relative(), file.fingerprint());
+                    reloaded += loadRecipesFromFile(transaction,
+                            file.path(),
+                            file.relative(),
+                            file.fingerprint());
                 }
             }
         }
@@ -226,7 +274,10 @@ public class RecipeLoader {
             registeredKeys.remove(key);
             recipeResults.remove(id);
             recipeIngredients.remove(id);
+            ingredientMatchers.remove(key.toString());
             specialRecipes.remove(key.toString());
+            specialComponentParses.remove(key.toString());
+            specialSources.remove(key.toString());
             resultOverrides.remove(key.toString());
         }
         return removed;
@@ -255,16 +306,21 @@ public class RecipeLoader {
         return name.endsWith(".yml") || name.endsWith(".yaml");
     }
 
-    private int loadRecipesFromFile(RecipeTransaction transaction, Path path, String relative, String fingerprint) {
+    private int loadRecipesFromFile(RecipeTransaction transaction,
+                                    Path path,
+                                    String relative,
+                                    String fingerprint) {
         JsonNode root;
         try {
             root = parser.read(path);
         } catch (Exception e) {
+            fileFingerprints.remove(relative);
             logger.warning("Failed to parse " + relative + ": " + describeException(e));
             return 0;
         }
 
         fileFingerprints.put(relative, fingerprint);
+        hasDuplicatedFiles = false;
 
         if (root.isMissingNode() || root.isNull()) {
             logger.warning("Ignored empty recipe file: " + relative);
@@ -278,13 +334,20 @@ public class RecipeLoader {
         Set<String> ids = new HashSet<>();
         int loaded = 0;
         if (root.has("type")) {
-            loaded += tryRegister(transaction, root, relative, RecipeParser.labelOf(root, relative), ids) ? 1 : 0;
+            loaded += tryRegister(transaction,
+                    root,
+                    relative,
+                    RecipeParser.labelOf(root, relative), ids) ? 1 : 0;
         } else {
             Iterator<Map.Entry<String, JsonNode>> fields = root.fields();
             while (fields.hasNext()) {
                 Map.Entry<String, JsonNode> entry = fields.next();
                 loaded += tryRegister(transaction, entry.getValue(), relative, entry.getKey(), ids) ? 1 : 0;
             }
+        }
+
+        if (hasDuplicatedFiles) {
+            fileFingerprints.remove(relative);
         }
 
         if (!ids.isEmpty()) {
@@ -296,47 +359,121 @@ public class RecipeLoader {
         return loaded;
     }
 
-    private boolean tryRegister(RecipeTransaction transaction, JsonNode node, String relative, String label,
-            Set<String> ids) {
+    /**
+     * 如果有错误则会跳过并 log
+     */
+    private boolean tryRegister(RecipeTransaction transaction,
+                                JsonNode node,
+                                String relative,
+                                String label,
+                                Set<String> ids) {
+        ParseContext ctx = new ParseContext(label, relative);
         try {
-            register(transaction, parser.bind(node), ids);
-            return true;
+            RecipeDefinition definition = parser.bind(node);
+            ParseResult<ResolvedRecipe> resolved = ResolvedRecipe.of(plugin, definition, ctx);
+            // 尝试应用特殊组件
+            SpecialDefinition special = definition.special();
+            if (special != null) {
+                ComponentApplier.apply(plugin, new ItemStack(special.targetMaterial()), special.components());
+            }
+            if (ctx.hasErrors()) {
+                logger.warning("Skipped recipe '" + label + "' in " + relative + ": " + ctx.errorCount() + " problem(s): " + describe(ctx.problems()));
+                return false;
+            }
+            return register(transaction, definition, resolved.value(), ids, ctx);
+        } catch (ParseProblem e) {
+            logger.warning("Skipped recipe '" + label + "' in " + relative + ": " + e.describe());
+            return false;
         } catch (Exception e) {
             logger.warning("Skipped recipe '" + label + "' in " + relative + ": " + describeException(e));
             return false;
         }
     }
 
-    private void register(RecipeTransaction transaction, RecipeDefinition definition, Set<String> ids) {
+    private static String describe(List<ParseProblem> problems) {
+        return problems.stream().map(ParseProblem::describe).collect(Collectors.joining("; "));
+    }
+
+    private boolean register(RecipeTransaction transaction,
+                             RecipeDefinition definition,
+                             ResolvedRecipe resolved,
+                             Set<String> ids,
+                             ParseContext ctx) {
         String id = definition.id();
         NamespacedKey namespacedKey = new NamespacedKey(plugin, id);
 
-        transaction.add(definition.toBukkitRecipe(plugin));
+        if (registeredKeys.contains(namespacedKey)) {
+            hasDuplicatedFiles = true;
+            logger.warning("Duplicate recipe id '" + id + "': another file already registered it, skipping.");
+            return false;
+        }
+
+        transaction.add(definition.toBukkitRecipe(plugin, resolved));
         registeredKeys.add(namespacedKey);
         ids.add(id);
 
-        recipeResults.put(id, definition.result().toItemStack(plugin, "result"));
-
-        List<Ingredient> flattened = definition.flattenedIngredients();
-        List<ItemStack> ingredients = new ArrayList<>(flattened.size());
-        for (int i = 0; i < flattened.size(); i++) {
-            ingredients.add(flattened.get(i).toItemStack(plugin, "ingredient_" + i));
-        }
-        recipeIngredients.put(id, ingredients);
+        recipeResults.put(id, resolved.result());
+        recipeIngredients.put(id, resolved.ingredientItems());
+        ingredientMatchers.put(namespacedKey.toString(), resolved.matchers());
 
         SpecialDefinition special = definition.special();
         int amount = definition.result().amountOrDefault();
         boolean needsOverriding = definition.resultComponents() != null || amount != Ingredient.DEFAULT_AMOUNT;
         if (needsOverriding && (special != null || definition instanceof TransmuteRecipeDefinition)) {
-            resultOverrides.put(namespacedKey.toString(), new ResultOverride(definition.resultComponents(), amount));
+            resultOverrides.put(namespacedKey.toString(),
+                    new ResultOverride(resolved.resultResolved().parsed(),
+                            definition.resultComponents(),
+                            amount));
         }
 
         if (special != null) {
             specialRecipes.put(namespacedKey.toString(), special);
-            logger.info("Stored special recipe: " + namespacedKey + " -> " + special.targetMaterial() + " x" + amount
-                    + (special.sourceCharacter() != null ? ", sourceChar=" + special.sourceCharacter() : "")
-                    + (special.sourceSlot() != null ? ", sourceSlot=" + special.sourceSlot() : ""));
+            specialComponentParses.put(namespacedKey.toString(), ComponentApplier.parse(plugin, special.components(), ctx).value());
+            specialSources.put(namespacedKey.toString(), resolveSpecialSource(resolved, definition, special, namespacedKey.toString()));
+            logger.fine(() -> "Stored special recipe: " + namespacedKey + " -> " + special.targetMaterial() + " x" + amount + (special.sourceCharacter() != null ? ", sourceChar=" + special.sourceCharacter() : "") + (special.sourceSlot() != null ? ", sourceSlot=" + special.sourceSlot() : ""));
         }
+        return true;
+    }
+
+    private SpecialSource resolveSpecialSource(ResolvedRecipe resolved,
+                                               RecipeDefinition definition,
+                                               SpecialDefinition special,
+                                               String key) {
+        if (special.sourceSlot() != null) {
+            return new SpecialSource(special.sourceSlot(), null, null);
+        }
+        Character symbol = special.sourceCharacterOrNull();
+        if (symbol != null) {
+            if (definition instanceof ShapedRecipeDefinition shaped) {
+                Ingredient source = shaped.ingredients().get(symbol);
+                if (source == null) {
+                    logger.warning("special.source-character '" + symbol + "' is not defined in ingredients of " + key + "; falling back to the transmute input");
+                } else {
+                    Ingredient.Resolved resolvedSource = resolved.of(source);
+                    return new SpecialSource(slotOf(shaped.pattern(), symbol), source.toRecipeChoice(resolvedSource), resolvedSource.toMatcher());
+                }
+            } else {
+                logger.warning("special.source-character '" + symbol + "' can only be used in shaped recipes; falling back for " + key);
+            }
+        }
+        if (definition instanceof TransmuteRecipeDefinition transmute) {
+            Ingredient input = transmute.input();
+            Ingredient.Resolved resolvedInput = resolved.of(input);
+            return new SpecialSource(-1, input.toRecipeChoice(resolvedInput), resolvedInput.toMatcher());
+        }
+        return new SpecialSource(-1, null, null);
+    }
+
+    private static int slotOf(List<String> pattern, char symbol) {
+        for (int row = 0; row < Math.min(pattern.size(), 3); row++) {
+            String line = pattern.get(row);
+            for (int col = 0; col < Math.min(line.length(), 3); col++) {
+                if (line.charAt(col) == symbol) {
+                    return row * 3 + col;
+                }
+            }
+        }
+        return -1;
     }
 
     private static String describeException(Exception e) {

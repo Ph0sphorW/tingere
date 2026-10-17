@@ -26,12 +26,11 @@ public record ShapelessRecipeDefinition(@JsonProperty(required = true) String id
     }
 
     @Override
-    public Recipe toBukkitRecipe(Tingere plugin) {
-        ShapelessRecipe recipe = new ShapelessRecipe(
-                new NamespacedKey(plugin, id), result.toItemStack(plugin, "result"));
+    public Recipe toBukkitRecipe(Tingere plugin, ResolvedRecipe resolved) {
+        ShapelessRecipe recipe = new ShapelessRecipe(new NamespacedKey(plugin, id), resolved.result());
 
-        for (int i = 0; i < ingredients.size(); i++) {
-            recipe.addIngredient(ingredients.get(i).toRecipeChoice(plugin, "ingredient_" + i));
+        for (Ingredient ingredient : ingredients) {
+            recipe.addIngredient(ingredient.toRecipeChoice(resolved.of(ingredient)));
         }
         return recipe;
     }
